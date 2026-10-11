@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <math.h>
 #include <omp.h>
 
@@ -36,16 +37,53 @@ void freeMatrix(double **m, int rows) {
     free(m);
 }
 
-// Returns 1 on success, 0 at clean end of file, -1 on a parse error.
-int readMatrix(FILE *fp, struct Matrix *out) {
-    int rows, cols;
-    int got = fscanf(fp, "%d,%d", &rows, &cols);
-    if (got == EOF) {
-        return 0;
+// Read one line without the newline into a malloc'd string (caller frees), or
+// NULL at end of file. A trailing '\r' is stripped so CRLF files also parse.
+char *readLine(FILE *fp) {
+    size_t cap = 128, len = 0;
+    char *buf = malloc(cap);
+    if (buf == NULL) return NULL;
+    int c;
+    while ((c = fgetc(fp)) != EOF && c != '\n') {
+        if (len + 1 >= cap) {
+            cap *= 2;
+            char *tmp = realloc(buf, cap);
+            if (tmp == NULL) { free(buf); return NULL; }
+            buf = tmp;
+        }
+        buf[len++] = (char)c;
     }
+    if (c == EOF && len == 0) { free(buf); return NULL; }
+    if (len > 0 && buf[len - 1] == '\r') len--;
+    buf[len] = '\0';
+    return buf;
+}
+
+int isBlank(const char *s) {
+    for (; *s; s++) {
+        if (*s != ' ' && *s != '\t' && *s != '\r') return 0;
+    }
+    return 1;
+}
+
+// Returns 1 on success, 0 at clean end of file, -1 on a parse error. Parsing is
+// line-based so a wrong row count or non-numeric token is caught, not absorbed
+// into the next row.
+int readMatrix(FILE *fp, struct Matrix *out) {
+    // Skip blank lines, then read the "rows,cols" header.
+    char *line;
+    do {
+        line = readLine(fp);
+        if (line == NULL) return 0;
+        if (isBlank(line)) { free(line); line = NULL; }
+    } while (line == NULL);
+
+    int rows, cols;
+    char extra;
+    int got = sscanf(line, "%d,%d %c", &rows, &cols, &extra);
+    free(line);
     if (got != 2 || rows <= 0 || cols <= 0) {
-        fprintf(stderr, "Invalid matrix header (got %d fields, rows=%d cols=%d)\n",
-                got, rows, cols);
+        fprintf(stderr, "Invalid matrix header (expected rows,cols)\n");
         return -1;
     }
 
@@ -56,17 +94,43 @@ int readMatrix(FILE *fp, struct Matrix *out) {
     }
 
     for (int r = 0; r < rows; r++) {
-        for (int c = 0; c < cols - 1; c++) {
-            if (fscanf(fp, "%lf,", &m[r][c]) != 1) {
-                fprintf(stderr, "Matrix %dx%d: bad or missing value at row %d col %d\n",
-                        rows, cols, r, c);
+        line = readLine(fp);
+        if (line == NULL || isBlank(line)) {
+            fprintf(stderr, "Matrix %dx%d: declares %d rows but row %d is missing\n",
+                    rows, cols, rows, r);
+            free(line);
+            freeMatrix(m, rows);
+            return -1;
+        }
+
+        int c = 0;
+        char *tok = strtok(line, ",");
+        while (tok != NULL) {
+            if (c >= cols) {
+                fprintf(stderr, "Matrix %dx%d: row %d has more than %d values\n",
+                        rows, cols, r, cols);
+                free(line);
                 freeMatrix(m, rows);
                 return -1;
             }
+            char *end;
+            double v = strtod(tok, &end);
+            while (*end == ' ' || *end == '\t' || *end == '\r') end++;
+            if (end == tok || *end != '\0') {
+                fprintf(stderr, "Matrix %dx%d: non-numeric value '%s' at row %d col %d\n",
+                        rows, cols, tok, r, c);
+                free(line);
+                freeMatrix(m, rows);
+                return -1;
+            }
+            m[r][c++] = v;
+            tok = strtok(NULL, ",");
         }
-        if (fscanf(fp, "%lf", &m[r][cols - 1]) != 1) {
-            fprintf(stderr, "Matrix %dx%d: bad or missing value at row %d col %d\n",
-                    rows, cols, r, cols - 1);
+        free(line);
+
+        if (c != cols) {
+            fprintf(stderr, "Matrix %dx%d: row %d has %d values, expected %d\n",
+                    rows, cols, r, c, cols);
             freeMatrix(m, rows);
             return -1;
         }
