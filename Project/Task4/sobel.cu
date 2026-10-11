@@ -113,29 +113,31 @@ int processImage(const char *inFileName) {
         return 1;
     }
 
-    CUDA_TRY(cudaMalloc((void **)&d_inImg, imgSize));
-    CUDA_TRY(cudaMalloc((void **)&d_outImg, imgSize));
-    CUDA_TRY(cudaMemcpy(d_inImg, c_inImg, imgSize, cudaMemcpyHostToDevice));
+    // Build the output name before the first goto so no initialised variable is
+    // in scope at the cleanup label ("photo.png" -> "photo_sobel.png").
+    char outFileName[512];
+    const char *dot = strrchr(inFileName, '.');
+    if (dot != NULL) {
+        sprintf(outFileName, "%.*s_sobel%s", (int)(dot - inFileName), inFileName, dot);
+    } else {
+        sprintf(outFileName, "%s_sobel.png", inFileName);
+    }
 
+    // 16x16 blocks over a grid covering the image (declared before the first
+    // goto, as dim3 has a constructor).
     dim3 blockSize(16, 16);
     dim3 gridSize((width + blockSize.x - 1) / blockSize.x,
                   (height + blockSize.y - 1) / blockSize.y);
+
+    CUDA_TRY(cudaMalloc((void **)&d_inImg, imgSize));
+    CUDA_TRY(cudaMalloc((void **)&d_outImg, imgSize));
+    CUDA_TRY(cudaMemcpy(d_inImg, c_inImg, imgSize, cudaMemcpyHostToDevice));
 
     sobelEdge<<<gridSize, blockSize>>>(d_inImg, d_outImg, width, height);
     CUDA_TRY(cudaGetLastError());
     CUDA_TRY(cudaDeviceSynchronize());
 
     CUDA_TRY(cudaMemcpy(c_outImg, d_outImg, imgSize, cudaMemcpyDeviceToHost));
-
-    // "photo.png" -> "photo_sobel.png"
-    char outFileName[512];
-    const char *dot = strrchr(inFileName, '.');
-    if (dot != NULL) {
-        int base = (int)(dot - inFileName);
-        sprintf(outFileName, "%.*s_sobel%s", base, inFileName, dot);
-    } else {
-        sprintf(outFileName, "%s_sobel.png", inFileName);
-    }
 
     lpError = lodepng_encode32_file(outFileName, c_outImg, width, height);
     if (lpError) {
