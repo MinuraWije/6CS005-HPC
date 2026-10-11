@@ -4,26 +4,11 @@
 
 #include "lodepng.h"
 
-/*
- * Task 4 - Sobel edge detection across many PNGs with CUDA (6CS005).
- *
- * Usage: ./sobel <image1.png> [image2.png ...]
- * For each input "name.png" it writes "name_sobel.png".
- *
- * This is the HPC-11 week 2 program, extended to:
- *   - loop over every image given on the command line,
- *   - use zero padding at the edges (out-of-image neighbours count as 0)
- *     instead of blacking the border out, as the brief requires,
- *   - build the output file name with sprintf,
- *   - check the CUDA calls for errors and free memory per image,
- *   - skip a bad image and carry on with the rest.
- */
+// Task 4 - Sobel edge detection across many PNGs with CUDA.
+// Usage: ./sobel <image1.png> [image2.png ...]
+// For each "name.png" it writes "name_sobel.png". Greyscale 0.299R+0.587G+0.114B,
+// edge magnitude sqrt(Gx^2+Gy^2), zero padding at the borders.
 
-/*
- * CUDA error-checking helper (required by the brief).  Returns 0 on success,
- * 1 on failure, so the caller can clean up and skip this image rather than
- * killing the whole batch.
- */
 #define CUDA_TRY(call)                                                        \
     do {                                                                     \
         cudaError_t err = (call);                                           \
@@ -34,17 +19,14 @@
         }                                                                  \
     } while (0)
 
-/*
- * Sobel kernel with zero padding.
- * RGBA layout: R=pixel[0] G=pixel[1] B=pixel[2] A=pixel[3].
- */
+// RGBA layout: R=pixel[0] G=pixel[1] B=pixel[2] A=pixel[3].
 __global__ void sobelEdge(unsigned char *inImg, unsigned char *outImg,
                           unsigned int width, unsigned int height) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
 
     if (x >= width || y >= height) {
-        return;                         /* spare threads outside the image */
+        return;
     }
 
     int index = (y * width + x) * 4;
@@ -71,8 +53,7 @@ __global__ void sobelEdge(unsigned char *inImg, unsigned char *outImg,
             float gray;
             if (pixelX < 0 || pixelX >= width ||
                 pixelY < 0 || pixelY >= height) {
-                /* Zero padding: a neighbour off the edge counts as 0. */
-                gray = 0.0f;
+                gray = 0.0f;            // zero padding off the edge
             } else {
                 int pixelIndex = (pixelY * width + pixelX) * 4;
                 unsigned char r = inImg[pixelIndex];
@@ -98,7 +79,7 @@ __global__ void sobelEdge(unsigned char *inImg, unsigned char *outImg,
     outImg[index + 3] = 255;
 }
 
-/* Process one image.  Returns 0 on success, non-zero on failure. */
+// Returns 0 on success, non-zero on failure (a bad image is skipped).
 int processImage(const char *inFileName) {
     unsigned char *c_inImg = NULL;
     unsigned char *c_outImg = NULL;
@@ -109,13 +90,12 @@ int processImage(const char *inFileName) {
 
     printf("Processing %s\n", inFileName);
 
-    /* Decode the PNG. */
     unsigned int lpError =
         lodepng_decode32_file(&c_inImg, &width, &height, inFileName);
     if (lpError) {
         fprintf(stderr, "  Error decoding '%s': %s\n",
                 inFileName, lodepng_error_text(lpError));
-        return 1;                        /* skip this image */
+        return 1;
     }
     if (width == 0 || height == 0) {
         fprintf(stderr, "  '%s' has zero size, skipping\n", inFileName);
@@ -126,7 +106,6 @@ int processImage(const char *inFileName) {
 
     unsigned int imgSize = 4 * width * height;
 
-    /* Output buffer on the heap (not the stack, so big images are fine). */
     c_outImg = (unsigned char *)malloc(imgSize);
     if (c_outImg == NULL) {
         fprintf(stderr, "  Could not allocate output buffer\n");
@@ -134,12 +113,10 @@ int processImage(const char *inFileName) {
         return 1;
     }
 
-    /* GPU memory, checked for errors. */
     CUDA_TRY(cudaMalloc((void **)&d_inImg, imgSize));
     CUDA_TRY(cudaMalloc((void **)&d_outImg, imgSize));
     CUDA_TRY(cudaMemcpy(d_inImg, c_inImg, imgSize, cudaMemcpyHostToDevice));
 
-    /* 16x16 blocks, grid big enough to cover the image (HPC-11 wk2). */
     dim3 blockSize(16, 16);
     dim3 gridSize((width + blockSize.x - 1) / blockSize.x,
                   (height + blockSize.y - 1) / blockSize.y);
@@ -150,7 +127,7 @@ int processImage(const char *inFileName) {
 
     CUDA_TRY(cudaMemcpy(c_outImg, d_outImg, imgSize, cudaMemcpyDeviceToHost));
 
-    /* Build the output name: "photo.png" -> "photo_sobel.png". */
+    // "photo.png" -> "photo_sobel.png"
     char outFileName[512];
     const char *dot = strrchr(inFileName, '.');
     if (dot != NULL) {
@@ -170,7 +147,6 @@ int processImage(const char *inFileName) {
     }
 
 cleanup:
-    /* Free GPU and CPU memory for this image before the next one. */
     if (d_inImg)  cudaFree(d_inImg);
     if (d_outImg) cudaFree(d_outImg);
     free(c_inImg);

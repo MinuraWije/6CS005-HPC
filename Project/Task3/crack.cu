@@ -1,31 +1,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-/*
- * Task 3 - Password cracking with CUDA (6CS005).
- *
- * Usage: ./crack <encrypted_file>
- * Output: decrypted.txt
- *
- * Each line of the input is a 10-character encrypted password produced by the
- * lecturer's cudaCrypt (2 lowercase letters + 2 digits, giving 26*26*10*10 =
- * 67600 possible raw passwords).  We copy all encrypted passwords to the GPU
- * and launch one thread per password.  Each thread tries every candidate,
- * encrypts it with a __device__ version of cudaCrypt, and when the result
- * matches its own encrypted password it writes the 4-character raw password
- * back.  So each thread does the minimum work: it cracks exactly one password.
- */
+// Task 3 - password cracking with CUDA.
+// Usage: ./crack <encrypted_file>   Output: decrypted.txt
+// Each input line is a 10-char password from the lecturer's cudaCrypt (2 lowercase
+// letters + 2 digits = 26*26*10*10 = 67600 candidates). One GPU thread per line
+// brute-forces every candidate and writes back the 4-char original on a match.
 
-#define RAW_LEN  4      /* 2 letters + 2 digits                         */
-#define DEC_LEN  5      /* raw password + '\0'                          */
-#define ENC_LEN 10      /* encrypted password length                    */
-#define ENC_BUF 11      /* encrypted + '\0'                             */
+#define RAW_LEN  4
+#define DEC_LEN  5      // raw + '\0'
+#define ENC_LEN 10
+#define ENC_BUF 11      // encrypted + '\0'
 
-/*
- * Error-checking helper.  The brief requires the GPU memory to be allocated
- * and checked for errors.  This tests a cudaError_t the same way we test
- * fopen == NULL: if it failed, print the reason and stop.
- */
 #define CUDA_CHECK(call)                                                     \
     do {                                                                    \
         cudaError_t err = (call);                                          \
@@ -36,11 +22,8 @@
         }                                                                 \
     } while (0)
 
-/*
- * Device version of the lecturer's cudaCrypt.  It writes into a buffer the
- * caller supplies (newPassword), instead of the original's static buffer,
- * because a static buffer would be shared by every GPU thread.
- */
+// Device version of the lecturer's cudaCrypt; writes into a caller buffer so
+// each thread has its own (the original used a shared static buffer).
 __device__ void cudaCrypt(const char *rawPassword, char *newPassword) {
     newPassword[0] = rawPassword[0] + 2;
     newPassword[1] = rawPassword[0] - 2;
@@ -55,13 +38,13 @@ __device__ void cudaCrypt(const char *rawPassword, char *newPassword) {
     newPassword[10] = '\0';
 
     for (int i = 0; i < 10; i++) {
-        if (i >= 0 && i < 6) {                /* lower-case letter section */
+        if (i >= 0 && i < 6) {
             if (newPassword[i] > 122) {
                 newPassword[i] = (newPassword[i] - 122) + 97;
             } else if (newPassword[i] < 97) {
                 newPassword[i] = (97 - newPassword[i]) + 97;
             }
-        } else {                              /* digit section */
+        } else {
             if (newPassword[i] > 57) {
                 newPassword[i] = (newPassword[i] - 57) + 48;
             } else if (newPassword[i] < 48) {
@@ -71,13 +54,9 @@ __device__ void cudaCrypt(const char *rawPassword, char *newPassword) {
     }
 }
 
-/*
- * One thread per encrypted password.  The thread brute-forces all 67600
- * candidates and, on a match, writes the raw password to d_dec.
- */
 __global__ void crackKernel(const char *d_enc, char *d_dec, int n) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= n) return;                      /* guard spare threads */
+    if (idx >= n) return;
 
     const char *target = &d_enc[idx * ENC_BUF];
 
@@ -95,7 +74,6 @@ __global__ void crackKernel(const char *d_enc, char *d_dec, int n) {
 
                     cudaCrypt(candidate, attempt);
 
-                    /* Compare all 10 characters. */
                     int match = 1;
                     for (int k = 0; k < ENC_LEN; k++) {
                         if (attempt[k] != target[k]) {
@@ -109,7 +87,7 @@ __global__ void crackKernel(const char *d_enc, char *d_dec, int n) {
                         d_dec[idx * DEC_LEN + 2] = c;
                         d_dec[idx * DEC_LEN + 3] = d;
                         d_dec[idx * DEC_LEN + 4] = '\0';
-                        return;                /* first match is enough */
+                        return;
                     }
                 }
             }
@@ -124,7 +102,7 @@ int main(int argc, char **argv) {
     }
     char *filename = argv[1];
 
-    /* --- Pass 1: count the lines (the OMPrime1.c getc loop). --- */
+    // Pass 1: count the lines.
     FILE *fp = fopen(filename, "r");
     if (fp == NULL) {
         fprintf(stderr, "Could not open file: %s\n", filename);
@@ -141,7 +119,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* --- Pass 2: read the encrypted passwords into a host buffer. --- */
+    // Pass 2: read the encrypted passwords into a host buffer.
     char *h_enc = (char *)malloc((size_t)n * ENC_BUF);
     char *h_dec = (char *)malloc((size_t)n * DEC_LEN);
     if (h_enc == NULL || h_dec == NULL) {
@@ -165,7 +143,7 @@ int main(int argc, char **argv) {
     }
     fclose(fp);
 
-    /* --- GPU memory, sized to the file, with error checking. --- */
+    // GPU memory sized to the file.
     char *d_enc = NULL;
     char *d_dec = NULL;
     CUDA_CHECK(cudaMalloc((void **)&d_enc, (size_t)n * ENC_BUF));
@@ -173,7 +151,7 @@ int main(int argc, char **argv) {
     CUDA_CHECK(cudaMemcpy(d_enc, h_enc, (size_t)n * ENC_BUF,
                           cudaMemcpyHostToDevice));
 
-    /* --- Launch configuration split by password count (HPC-9 formula). --- */
+    // Split blocks/threads by password count so each thread cracks one password.
     int threads = 1000;
     if (threads > n) threads = n;
     int blocks = (n + threads - 1) / threads;
@@ -181,14 +159,12 @@ int main(int argc, char **argv) {
            n, blocks, threads);
 
     crackKernel<<<blocks, threads>>>(d_enc, d_dec, n);
-    CUDA_CHECK(cudaGetLastError());            /* catch a bad launch */
+    CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    /* --- Copy the results back. --- */
     CUDA_CHECK(cudaMemcpy(h_dec, d_dec, (size_t)n * DEC_LEN,
                           cudaMemcpyDeviceToHost));
 
-    /* --- Write the output file. --- */
     FILE *out = fopen("decrypted.txt", "w");
     if (out == NULL) {
         fprintf(stderr, "Could not open decrypted.txt for writing\n");
@@ -202,7 +178,6 @@ int main(int argc, char **argv) {
     fclose(out);
     printf("Wrote decrypted.txt\n");
 
-    /* --- Free everything. --- */
     CUDA_CHECK(cudaFree(d_enc));
     CUDA_CHECK(cudaFree(d_dec));
     free(h_enc);

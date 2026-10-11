@@ -2,22 +2,14 @@
 #include <stdlib.h>
 #include <time.h>
 
-/*
- * Task 3 helper - test-data generator (adapted from the lecturer's
- * PasswordGeneratorToText2.c).
- *
- * Usage: ./passgen <count>
- * Writes:
- *   passwords.txt        - the encrypted passwords, one per line (crack.cu input)
- *   passwords_plain.txt  - the matching raw passwords (only to check results)
- *
- * The cudaCrypt function is the lecturer's, unchanged, so the encrypted file
- * matches exactly what the CUDA task must reverse.
- */
+// Task 3 helper - test-data generator (from the lecturer's PasswordGeneratorToText2.c).
+// Usage: ./passgen <count>
+// Writes passwords.txt (encrypted, crack.cu input) and passwords_plain.txt (originals,
+// used only to check results). cudaCrypt is the lecturer's, unchanged.
 
 char* cudaCrypt(char* rawPassword) {
 
-    static char newPassword[11]; /* static as in the lecturer's original */
+    static char newPassword[11];
 
     newPassword[0] = rawPassword[0] + 2;
     newPassword[1] = rawPassword[0] - 2;
@@ -32,13 +24,13 @@ char* cudaCrypt(char* rawPassword) {
     newPassword[10] = '\0';
 
     for (int i = 0; i < 10; i++) {
-        if (i >= 0 && i < 6) {                /* lower-case letter section */
+        if (i >= 0 && i < 6) {
             if (newPassword[i] > 122) {
                 newPassword[i] = (newPassword[i] - 122) + 97;
             } else if (newPassword[i] < 97) {
                 newPassword[i] = (97 - newPassword[i]) + 97;
             }
-        } else {                              /* digit section */
+        } else {
             if (newPassword[i] > 57) {
                 newPassword[i] = (newPassword[i] - 57) + 48;
             } else if (newPassword[i] < 48) {

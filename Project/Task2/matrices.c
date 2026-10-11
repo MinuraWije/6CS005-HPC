@@ -3,22 +3,10 @@
 #include <math.h>
 #include <omp.h>
 
-/*
- * Task 2 - Matrix operations with OpenMP (6CS005).
- *
- * Usage: ./matrices <input_file> <num_threads>
- * Output: results.txt
- *
- * The file holds matrices as a "rows,cols" header followed by that many
- * comma-separated rows (the MatData.txt / MatAdd.c format).  Matrices are
- * processed in pairs (A, B).  For each pair we do: A+B, A-B, A.*B, A./B,
- * transpose(A), transpose(B) and A*B, doing each only when the shapes allow
- * it.  Element-wise work is parallelised with collapse(2); the multiply
- * parallelises the row loop.  The number of threads is capped at the largest
- * relevant dimension.
- */
-
-/* ---- Matrix helpers: double** with the rows/cols kept alongside. ---- */
+// Task 2 - matrix operations with OpenMP.
+// Usage: ./matrices <input_file> <num_threads>   Output: results.txt
+// Matrices are read as "rows,cols" headers + comma-separated rows and processed
+// in pairs: A+B, A-B, A.*B, A./B, transpose(A), transpose(B), A*B.
 
 struct Matrix {
     int rows;
@@ -26,7 +14,6 @@ struct Matrix {
     double **data;
 };
 
-/* Allocate a rows x cols matrix (per-row malloc, as in MatAdd.c). */
 double **allocMatrix(int rows, int cols) {
     double **m = malloc(rows * sizeof(double *));
     if (m == NULL) return NULL;
@@ -41,7 +28,6 @@ double **allocMatrix(int rows, int cols) {
     return m;
 }
 
-/* Free every row, then the row array (MatAdd.c only freed the row array). */
 void freeMatrix(double **m, int rows) {
     if (m == NULL) return;
     for (int r = 0; r < rows; r++) {
@@ -50,15 +36,12 @@ void freeMatrix(double **m, int rows) {
     free(m);
 }
 
-/*
- * Read one matrix from the file.
- * Returns  1 on success, 0 at clean end of file, -1 on a parse error.
- */
+// Returns 1 on success, 0 at clean end of file, -1 on a parse error.
 int readMatrix(FILE *fp, struct Matrix *out) {
     int rows, cols;
     int got = fscanf(fp, "%d,%d", &rows, &cols);
     if (got == EOF) {
-        return 0;               /* no more matrices */
+        return 0;
     }
     if (got != 2 || rows <= 0 || cols <= 0) {
         fprintf(stderr, "Invalid matrix header (got %d fields, rows=%d cols=%d)\n",
@@ -81,7 +64,7 @@ int readMatrix(FILE *fp, struct Matrix *out) {
                 return -1;
             }
         }
-        if (fscanf(fp, "%lf", &m[r][cols - 1]) != 1) {   /* last in the row */
+        if (fscanf(fp, "%lf", &m[r][cols - 1]) != 1) {
             fprintf(stderr, "Matrix %dx%d: bad or missing value at row %d col %d\n",
                     rows, cols, r, cols - 1);
             freeMatrix(m, rows);
@@ -95,8 +78,7 @@ int readMatrix(FILE *fp, struct Matrix *out) {
     return 1;
 }
 
-/* Write a result matrix to the file in the brief's format:
-   a "Label - rows,cols" line, then comma-separated rows. */
+// "Label - rows,cols" header followed by comma-separated rows.
 void writeMatrix(FILE *out, const char *label, double **m, int rows, int cols) {
     fprintf(out, "%s - %d,%d\n", label, rows, cols);
     for (int r = 0; r < rows; r++) {
@@ -108,7 +90,7 @@ void writeMatrix(FILE *out, const char *label, double **m, int rows, int cols) {
     }
 }
 
-/* Cap the thread count at the largest dimension involved, then apply it. */
+// Cap the thread count at the largest dimension involved, then apply it.
 int capThreads(int requested, int maxDim) {
     int t = requested;
     if (t > maxDim) t = maxDim;
@@ -147,17 +129,15 @@ int main(int argc, char **argv) {
     while (1) {
         struct Matrix A, B;
 
-        /* Read matrix A. */
         int ra = readMatrix(fp, &A);
-        if (ra == 0) break;             /* clean end of file */
-        if (ra == -1) {                 /* parse error */
+        if (ra == 0) break;
+        if (ra == -1) {
             fprintf(out, "Stopped: could not read matrix A of a pair.\n");
             break;
         }
 
-        /* Read matrix B. */
         int rb = readMatrix(fp, &B);
-        if (rb == 0) {                  /* odd number of matrices */
+        if (rb == 0) {
             fprintf(out, "==================== Pair %d ====================\n", pair + 1);
             fprintf(out, "Only one matrix left (%dx%d); a pair needs two. Skipped.\n",
                     A.rows, A.cols);
@@ -177,7 +157,7 @@ int main(int argc, char **argv) {
 
         int sameShape = (A.rows == B.rows && A.cols == B.cols);
 
-        /* ---- Element-wise operations (need identical shapes). ---- */
+        // Element-wise operations need identical shapes.
         if (sameShape) {
             int t = capThreads(requested, A.rows > A.cols ? A.rows : A.cols);
             fprintf(out, "(element-wise ops using %d threads)\n", t);
@@ -202,9 +182,8 @@ int main(int argc, char **argv) {
                     add[i][j] = A.data[i][j] + B.data[i][j];
                     sub[i][j] = A.data[i][j] - B.data[i][j];
                     mul[i][j] = A.data[i][j] * B.data[i][j];
-                    /* NaN when dividing by zero, as the brief requires. */
                     if (B.data[i][j] == 0.0) {
-                        dvd[i][j] = NAN;
+                        dvd[i][j] = NAN;        // NaN on divide-by-zero
                     } else {
                         dvd[i][j] = A.data[i][j] / B.data[i][j];
                     }
@@ -228,7 +207,7 @@ int main(int argc, char **argv) {
             fprintf(out, "Element-wise division cannot be done - different size\n");
         }
 
-        /* ---- Transposes (always possible). ---- */
+        // Transposes are always valid.
         {
             int t = capThreads(requested, A.rows > A.cols ? A.rows : A.cols);
             double **ta = allocMatrix(A.cols, A.rows);
@@ -260,9 +239,9 @@ int main(int argc, char **argv) {
             (void)t;
         }
 
-        /* ---- Matrix multiplication A x B (needs A.cols == B.rows). ---- */
+        // A x B needs A.cols == B.rows.
         if (A.cols == B.rows) {
-            int t = capThreads(requested, A.rows);   /* row loop is parallelised */
+            int t = capThreads(requested, A.rows);
             fprintf(out, "(matrix multiplication using %d threads)\n", t);
 
             double **prod = allocMatrix(A.rows, B.cols);

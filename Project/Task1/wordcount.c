@@ -3,45 +3,27 @@
 #include <string.h>
 #include <pthread.h>
 
-/*
- * Task 1 - Word occurrence counting with Pthreads (6CS005).
- *
- * Usage: ./wordcount <input_file> <num_threads>
- * Output: result.txt
- *
- * The file is read into memory, the words are sliced between the threads by
- * index (the week1.c scheme), each thread counts its own slice into a local
- * table, then merges that table into one shared table under a mutex.  Each
- * thread also returns how many words it processed via pthread_exit, and main
- * sums those as a check.
- */
+// Task 1 - word occurrence counting with Pthreads.
+// Usage: ./wordcount <input_file> <num_threads>   Output: result.txt
 
-#define MAX_WORD_LEN 50     /* longest word we store (plus the '\0')      */
-#define MAX_UNIQUE  1000    /* upper bound on the number of distinct words */
+#define MAX_WORD_LEN 50
+#define MAX_UNIQUE  1000
 
-/* One entry of a word-count table. */
 struct wordCount {
     char word[MAX_WORD_LEN];
     int  count;
 };
 
-/* Arguments passed to each thread (same idea as the struct in week1.c). */
 struct threadArgs {
-    int start;                  /* first word index for this thread        */
-    int finish;                 /* last word index for this thread         */
-    char (*words)[MAX_WORD_LEN];/* pointer to the shared array of words     */
+    int start;
+    int finish;
+    char (*words)[MAX_WORD_LEN];
 };
 
-/* The one shared results table, protected by the mutex below. */
 struct wordCount table[MAX_UNIQUE];
 int uniqueCount = 0;
 pthread_mutex_t mutex;
 
-/*
- * Linear search helper: find a word in a table of 'size' entries.
- * Returns the index if found, otherwise -1.  (The same simple search the
- * class used; no hash tables, which were not taught.)
- */
 int findWord(struct wordCount *tbl, int size, const char *word) {
     for (int i = 0; i < size; i++) {
         if (strcmp(tbl[i].word, word) == 0) {
@@ -51,15 +33,13 @@ int findWord(struct wordCount *tbl, int size, const char *word) {
     return -1;
 }
 
-/* The function each thread runs. */
 void *countMethod(void *args) {
     struct threadArgs *ta = (struct threadArgs *)args;
     int start = ta->start;
     int finish = ta->finish;
     char (*words)[MAX_WORD_LEN] = ta->words;
 
-    /* Each thread builds its own local table first, so no locking is needed
-       while counting.  Only the final merge touches shared memory. */
+    // Count into a local table first, then merge once under the lock.
     struct wordCount *local = malloc(MAX_UNIQUE * sizeof(struct wordCount));
     if (local == NULL) {
         fprintf(stderr, "Thread could not allocate local table\n");
@@ -80,8 +60,6 @@ void *countMethod(void *args) {
         processed++;
     }
 
-    /* Merge the local table into the shared table.  We lock once per thread,
-       not once per word, to keep the critical section small (Week 1/2). */
     pthread_mutex_lock(&mutex);
     for (int i = 0; i < localCount; i++) {
         int pos = findWord(table, uniqueCount, local[i].word);
@@ -97,7 +75,6 @@ void *countMethod(void *args) {
 
     free(local);
 
-    /* Return the number of words this thread processed (as week1.c does). */
     long *answer = malloc(sizeof(long));
     *answer = processed;
     pthread_exit(answer);
@@ -116,8 +93,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* --- Pass 1: count the words in the file (the OMPrime1.c getc loop,
-       adapted to count word starts rather than lines). --- */
+    // Pass 1: count the words.
     FILE *fp = fopen(filename, "r");
     if (fp == NULL) {
         fprintf(stderr, "Could not open file: %s\n", filename);
@@ -131,7 +107,7 @@ int main(int argc, char **argv) {
         if (c == ' ' || c == '\n' || c == '\t' || c == '\r') {
             inWord = 0;
         } else if (inWord == 0) {
-            inWord = 1;       /* start of a new word */
+            inWord = 1;
             wordTotal++;
         }
     }
@@ -142,7 +118,7 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* --- Pass 2: read the words into memory. --- */
+    // Pass 2: read the words into memory, folded to lower case.
     char (*words)[MAX_WORD_LEN] = malloc(wordTotal * sizeof(*words));
     if (words == NULL) {
         fprintf(stderr, "Could not allocate memory for %d words\n", wordTotal);
@@ -162,7 +138,6 @@ int main(int argc, char **argv) {
             free(words);
             return 1;
         }
-        /* Fold to lower case with a simple loop (no library helpers). */
         for (int j = 0; words[i][j] != '\0'; j++) {
             if (words[i][j] >= 'A' && words[i][j] <= 'Z') {
                 words[i][j] = words[i][j] + 32;
@@ -171,14 +146,12 @@ int main(int argc, char **argv) {
     }
     fclose(fp);
 
-    /* If there are more threads than words, only use as many as there are
-       words, so no thread gets an empty, backwards range. */
     if (threadCount > wordTotal) {
         threadCount = wordTotal;
         printf("More threads than words; using %d threads.\n", threadCount);
     }
 
-    /* --- Dynamic slicing by word index (exactly the week1.c scheme). --- */
+    // Dynamic slicing by word index; the remainder is spread over the first threads.
     int *sliceList = malloc(threadCount * sizeof(int));
     int *startList = malloc(threadCount * sizeof(int));
     int *finishList = malloc(threadCount * sizeof(int));
@@ -196,7 +169,7 @@ int main(int argc, char **argv) {
         sliceList[i] = wordTotal / threadCount;
     }
     for (int j = 0; j < remainder; j++) {
-        sliceList[j] = sliceList[j] + 1;   /* first threads do one extra word */
+        sliceList[j] = sliceList[j] + 1;
     }
     for (int k = 0; k < threadCount; k++) {
         if (k == 0) {
@@ -212,7 +185,6 @@ int main(int argc, char **argv) {
                i, startList[i], finishList[i], sliceList[i]);
     }
 
-    /* --- Create the threads. --- */
     pthread_mutex_init(&mutex, NULL);
 
     for (int i = 0; i < threadCount; i++) {
@@ -222,7 +194,6 @@ int main(int argc, char **argv) {
         pthread_create(&tids[i], NULL, countMethod, &args[i]);
     }
 
-    /* --- Join the threads and sum the per-thread counts. --- */
     long grandTotal = 0;
     for (int j = 0; j < threadCount; j++) {
         long *result;
@@ -238,8 +209,7 @@ int main(int argc, char **argv) {
     printf("Threads processed %ld words in total (file has %d).\n",
            grandTotal, wordTotal);
 
-    /* --- Sort the shared table: count descending, ties alphabetical.
-       A plain nested-loop (selection) sort, as taught; no qsort. --- */
+    // Sort: count descending, ties alphabetical.
     for (int i = 0; i < uniqueCount - 1; i++) {
         int best = i;
         for (int j = i + 1; j < uniqueCount; j++) {
@@ -256,7 +226,6 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* --- Write the results. --- */
     FILE *out = fopen("result.txt", "w");
     if (out == NULL) {
         fprintf(stderr, "Could not open result.txt for writing\n");
