@@ -152,8 +152,9 @@ int main(int argc, char **argv) {
                           cudaMemcpyHostToDevice));
 
     // Split blocks/threads by password count so each thread cracks one password.
-    int threads = 1000;
-    if (threads > n) threads = n;
+    // A fixed 256 threads per block keeps the work spread over multiple blocks
+    // (e.g. 1000 passwords -> 4 blocks x 256 threads), as the brief requires.
+    int threads = (n < 256) ? n : 256;
     int blocks = (n + threads - 1) / threads;
     printf("Cracking %d passwords with %d blocks x %d threads\n",
            n, blocks, threads);
