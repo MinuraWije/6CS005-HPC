@@ -1,0 +1,8 @@
+# macOS / Windows cruft
+.DS_Store
+Thumbs.db
+
+# build artifacts
+*.exe
+*.o
+*.out
